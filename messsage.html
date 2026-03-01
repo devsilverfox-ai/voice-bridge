@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Bridge | Private P2P Workspace</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        /* Tokyo Night Color Variables */
+        :root {
+            --bg: #1a1b26;
+            --sidebar-bg: #16161e;
+            --terminal-bg: #24283b;
+            --fg: #c0caf5;
+            --muted: #565f89;
+            --primary: #bb9af7;   /* Magenta */
+            --secondary: #7aa2f7; /* Blue */
+            --success: #9ece6a;   /* Green */
+            --danger: #f7768e;    /* Red */
+            --warning: #e0af68;   /* Yellow */
+            --cyan: #7dcfff;
+        }
+
+        body { 
+            font-family: 'Inter', system-ui, sans-serif; 
+            background-color: var(--bg);
+            color: var(--fg);
+            -webkit-font-smoothing: antialiased; 
+        }
+
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
+        
+        /* Progress Meters */
+        .v-meter { height: 4px; background: #2f3549; overflow: hidden; border-radius: 2px; }
+        #localMeter, #remoteMeter { height: 100%; width: 0%; transition: width 0.1s ease; }
+        
+        /* Video Display */
+        .video-container { 
+            position: relative; 
+            width: 100%; 
+            background: #000; 
+            overflow: hidden; 
+            aspect-ratio: 16/9; 
+            border: 2px solid var(--sidebar-bg);
+            border-radius: 8px;
+        }
+        #remoteVideo { width: 100%; height: 100%; object-fit: contain; }
+        
+        /* UI Components */
+        .btn-primary { 
+            background: var(--primary); 
+            color: var(--bg); 
+            transition: all 0.2s ease; 
+            font-weight: 700; 
+            text-transform: uppercase; 
+            letter-spacing: 0.05em; 
+            font-size: 11px;
+            border-radius: 6px;
+        }
+        .btn-primary:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+        .btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .btn-secondary { 
+            background: transparent; 
+            color: var(--secondary); 
+            border: 1px solid var(--secondary); 
+            transition: all 0.2s ease; 
+            font-weight: 700; 
+            text-transform: uppercase; 
+            letter-spacing: 0.05em; 
+            font-size: 11px; 
+            border-radius: 6px;
+        }
+        .btn-secondary:hover:not(:disabled) { background: var(--secondary); color: var(--bg); }
+
+        .btn-danger { 
+            color: var(--danger); 
+            border: 1px solid var(--danger); 
+            background: transparent; 
+            font-weight: 700; 
+            text-transform: uppercase; 
+            font-size: 11px; 
+            transition: all 0.2s ease; 
+            border-radius: 6px;
+        }
+        .btn-danger:hover:not(:disabled) { background: var(--danger); color: var(--bg); }
+
+        .input-field { 
+            background: var(--sidebar-bg); 
+            border: 1px solid var(--muted); 
+            color: var(--fg); 
+            font-size: 13px; 
+            transition: all 0.2s ease; 
+            border-radius: 6px; 
+        }
+        .input-field:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 2px rgba(187, 154, 247, 0.2); }
+
+        /* Animation States */
+        .status-pulse { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
+        }
+
+        /* Chat Bubbles */
+        .chat-bubble-local { 
+            background: var(--terminal-bg); 
+            border: 1px solid var(--primary); 
+            color: var(--fg); 
+            border-radius: 12px 12px 0 12px;
+        }
+        .chat-bubble-remote { 
+            background: var(--sidebar-bg); 
+            border: 1px solid var(--muted); 
+            color: var(--fg); 
+            border-radius: 12px 12px 12px 0;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden selection:bg-[#364a82] selection:text-white">
+
+    <div class="h-full w-full flex flex-col lg:flex-row">
+        
+        <!-- SIDEBAR -->
+        <aside class="w-full lg:w-80 bg-[#16161e] border-r border-[#24283b] flex flex-col h-full shrink-0">
+            <!-- Header -->
+            <div class="p-6 border-b border-[#24283b]">
+                <div class="flex items-center gap-2 mb-2">
+                    <div class="w-4 h-4 bg-[#bb9af7] rounded-sm"></div>
+                    <h1 class="text-sm font-extrabold uppercase tracking-tight text-[#bb9af7]">Voice Bridge</h1>
+                </div>
+                <div class="flex justify-between items-center">
+                    <p class="text-[10px] text-[#565f89] uppercase font-bold tracking-widest">Private Conversation Space</p>
+                    <div id="statusDot" class="w-2 h-2 rounded-full bg-[#565f89]"></div>
+                </div>
+            </div>
+
+            <!-- Your Status -->
+            <div class="p-6 border-b border-[#24283b]">
+                <p class="text-[10px] font-bold uppercase text-[#565f89] mb-3">Your Screen Name</p>
+                <div class="bg-[#1a1b26] border border-[#24283b] p-3 rounded-lg flex items-center justify-between">
+                    <span id="localUsernameDisplay" class="mono text-xs font-bold lowercase text-[#7dcfff]">setting up...</span>
+                    <svg class="w-4 h-4 text-[#565f89]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                </div>
+            </div>
+
+            <!-- Join A Room -->
+            <div class="p-6 flex-1 overflow-y-auto space-y-8">
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-[10px] font-bold uppercase text-[#565f89] block mb-1.5 ml-1">Room Name</label>
+                        <input type="text" id="roomIdInput" placeholder="my_private_room" class="w-full px-4 py-2.5 input-field font-medium">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold uppercase text-[#565f89] block mb-1.5 ml-1">Room Key</label>
+                        <input type="password" id="passwordInput" placeholder="••••••••" class="w-full px-4 py-2.5 input-field font-medium">
+                    </div>
+                    <div class="flex gap-2 pt-2">
+                        <button id="connectBtn" class="flex-1 py-3 btn-primary shadow-lg shadow-purple-900/20">Go Online</button>
+                        <button id="leaveBtn" disabled class="px-4 btn-danger">Leave</button>
+                    </div>
+                </div>
+
+                <!-- Connection Meters -->
+                <div class="space-y-5 pt-6 border-t border-[#24283b]">
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] font-bold uppercase text-[#565f89]">My Microphone</span>
+                            <span id="localStatus" class="text-[10px] font-bold text-[#565f89]">OFF</span>
+                        </div>
+                        <div class="v-meter"><div id="localMeter" class="bg-[#bb9af7]"></div></div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] font-bold uppercase text-[#565f89]">Friend's Connection</span>
+                            <span id="remoteStatus" class="text-[10px] font-bold text-[#565f89]">WAITING</span>
+                        </div>
+                        <div class="v-meter"><div id="remoteMeter" class="bg-[#9ece6a]"></div></div>
+                    </div>
+                </div>
+
+                <!-- Simple Health Check -->
+                <div class="p-4 bg-[#1a1b26] border border-[#24283b] rounded-lg space-y-2.5">
+                    <p class="text-[9px] font-black uppercase text-[#565f89] tracking-tighter mb-1">Connection Health</p>
+                    <div class="flex justify-between items-center">
+                        <span class="text-[11px] font-medium text-[#565f89]">Network Path:</span>
+                        <span id="diagIce" class="mono text-[10px] font-bold text-[#e0af68]">idle</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-[11px] font-medium text-[#565f89]">Handshake:</span>
+                        <span id="diagSignal" class="mono text-[10px] font-bold text-[#9ece6a]">stable</span>
+                    </div>
+                    <div class="flex justify-between items-center border-t border-[#24283b] pt-2 mt-2">
+                        <span class="text-[11px] font-medium text-[#565f89]">Data Bridge:</span>
+                        <span id="diagChannel" class="mono text-[10px] font-bold text-[#f7768e]">closed</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Media Actions -->
+            <div class="p-6 bg-[#16161e] border-t border-[#24283b] space-y-2">
+                <button id="screenShareBtn" disabled class="w-full py-3 btn-secondary">Share My Screen</button>
+                <div class="flex gap-2">
+                    <button id="startMicBtn" class="flex-1 py-3 btn-secondary">Start Mic</button>
+                    <button id="muteBtn" disabled class="px-5 btn-secondary">Mute</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN WORKSPACE -->
+        <main class="flex-1 flex flex-col h-full bg-[#1a1b26] relative">
+            
+            <!-- Utility Actions -->
+            <div class="absolute top-6 right-8 z-50 flex gap-3">
+                <button onclick="copyDebugLogs()" class="text-[10px] font-bold uppercase bg-[#24283b] border border-[#565f89] text-[#c0caf5] px-4 py-2 rounded hover:bg-[#bb9af7] hover:text-[#1a1b26] transition-all">
+                    Copy Connection Log
+                </button>
+            </div>
+
+            <!-- Media Display Area -->
+            <section id="videoSection" class="hidden p-6 bg-[#16161e] border-b border-[#24283b]">
+                <div class="video-container max-w-5xl mx-auto border-[#bb9af7]">
+                    <video id="remoteVideo" autoplay playsinline></video>
+                    <div id="noVideoMsg" class="absolute inset-0 flex items-center justify-center text-xs font-bold uppercase tracking-widest text-[#bb9af7]/40 bg-black/40">
+                        Secure Video Feed Active
+                    </div>
+                </div>
+            </section>
+
+            <!-- Conversation History -->
+            <section id="chatMessages" class="flex-1 p-8 overflow-y-auto space-y-4 flex flex-col">
+                <div class="text-center py-6 border-b border-[#24283b] mb-4">
+                    <span class="text-[11px] font-bold uppercase tracking-[0.3em] text-[#565f89] italic">Private and Secure Connection Active</span>
+                </div>
+            </section>
+
+            <!-- File Progress Bar -->
+            <div id="fileProgressContainer" class="hidden px-8 py-4 bg-[#16161e] text-[#c0caf5] border-t border-[#24283b] flex flex-col shadow-2xl">
+                <div class="flex justify-between items-center mb-2">
+                    <span id="fileNameLabel" class="text-xs font-bold uppercase truncate max-w-md text-[#7dcfff]">Sending file...</span>
+                    <span id="filePercentLabel" class="mono text-xs font-bold text-[#9ece6a]">0%</span>
+                </div>
+                <div class="h-2 bg-[#24283b] rounded-full overflow-hidden">
+                    <div id="fileProgressBar" class="h-full bg-[#9ece6a] transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <!-- Message Input Bar -->
+            <footer class="p-6 border-t border-[#24283b] flex items-center gap-4 bg-[#16161e]">
+                <label id="fileInputLabel" for="fileInput" class="disabled-label cursor-pointer text-[#7aa2f7] hover:opacity-70 transition-opacity p-3 border border-[#7aa2f7] bg-[#1a1b26] rounded-lg" title="Send a File (Max 50MB)">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" d="M12 4v16m8-8H4"/></svg>
+                    <input type="file" id="fileInput" class="hidden" disabled>
+                </label>
+                <form id="chatForm" class="flex-1 flex gap-3" autocomplete="off">
+                    <input type="text" id="chatInput" disabled autocomplete="off" placeholder="Connecting to your peer..." class="flex-1 input-field px-5 py-3.5 font-medium text-sm border-[#565f89] shadow-inner">
+                    <button type="submit" id="sendBtn" disabled class="px-10 btn-primary h-[50px]">Send</button>
+                </form>
+            </footer>
+        </main>
+    </div>
+
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script>
+        /**
+         * Voice Bridge | Tokyo Night Strict P2P Implementation
+         * Core WebRTC Handshake & Data Transfer Logic
+         */
+        const socket = io(); 
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB Threshold
+        
+        let pc, localStream, dataChannel, screenStream;
+        let isMuted = false, isP2PActive = false, currentRoomId = null;
+        let fullChatHistory = [];
+        let incomingFileBuffer = [], incomingFileSize = 0, incomingFileName = '', receivedSize = 0;
+        let makingOffer = false, ignoreOffer = false, isPolite = false; 
+        let debugLogs = [];
+
+        // --- Identity Management ---
+        const localUsername = (function() {
+            const adj = ["secure", "turbo", "swift", "silent", "neon", "elite", "hyper", "vortex", "prime", "zero"];
+            const n = ["link", "bridge", "node", "core", "flux", "nexus", "pulse", "peak", "gate", "axis"];
+            return (adj[Math.floor(Math.random() * adj.length)] + "_" + n[Math.floor(Math.random() * n.length)] + "_" + Math.floor(1000 + Math.random() * 9999)).toLowerCase();
+        })();
+
+        // --- UI Element Selectors ---
+        const connectBtn = document.getElementById('connectBtn');
+        const leaveBtn = document.getElementById('leaveBtn');
+        const screenShareBtn = document.getElementById('screenShareBtn');
+        const roomIdInput = document.getElementById('roomIdInput');
+        const passwordInput = document.getElementById('passwordInput');
+        const startMicBtn = document.getElementById('startMicBtn');
+        const muteBtn = document.getElementById('muteBtn');
+        const chatInput = document.getElementById('chatInput');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatForm = document.getElementById('chatForm');
+        const fileInput = document.getElementById('fileInput');
+        const fileInputLabel = document.getElementById('fileInputLabel');
+        const fileProgressContainer = document.getElementById('fileProgressContainer');
+        const fileProgressBar = document.getElementById('fileProgressBar');
+        const fileNameLabel = document.getElementById('fileNameLabel');
+        const filePercentLabel = document.getElementById('filePercentLabel');
+        const videoSection = document.getElementById('videoSection');
+        const localUsernameDisplay = document.getElementById('localUsernameDisplay');
+        const diagIce = document.getElementById('diagIce');
+        const diagSignal = document.getElementById('diagSignal');
+        const diagChannel = document.getElementById('diagChannel');
+
+        /**
+         * Application Initialization
+         */
+        window.onload = () => {
+            localUsernameDisplay.innerText = localUsername;
+            log("System initialized: " + localUsername);
+            if (!window.isSecureContext) {
+                log("Connection error: Browsers require HTTPS for secure calls.", true);
+                addSystemMessage("SECURE BROWSING (HTTPS) REQUIRED", true);
+            }
+        };
+
+        // --- Utility Functions ---
+
+        function log(msg, isError = false) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${msg}`;
+            debugLogs.push(logEntry);
+            if (isError) console.error(logEntry);
+            else console.log(logEntry);
+        }
+
+        window.copyDebugLogs = () => {
+            const text = debugLogs.join('\n');
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            addSystemMessage("Connection logs copied.");
+        };
+
+        function addSystemMessage(text, isError = false) {
+            const div = document.createElement('div');
+            div.className = "text-center py-2";
+            div.innerHTML = `<span class="text-[10px] font-bold uppercase tracking-widest ${isError ? 'text-[#f7768e]' : 'text-[#565f89]'}">${text}</span>`;
+            chatMessages.appendChild(div); 
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function updateStatusIndicator(text, color, pulse = false) {
+            diagSignal.innerText = text.toLowerCase();
+            const dot = document.getElementById('statusDot');
+            dot.style.backgroundColor = color === 'bg-emerald-500' ? '#9ece6a' : color;
+            if (pulse) dot.classList.add('status-pulse');
+            else dot.classList.remove('status-pulse');
+        }
+
+        /**
+         * 1. SIGNALING LAYER
+         */
+        socket.on('connect', () => {
+            log("Link to server active.");
+            document.getElementById('statusDot').className = "w-2 h-2 rounded-full bg-[#9ece6a]";
+        });
+
+        socket.on('error-msg', (msg) => { 
+            log("Handshake Error: " + msg, true);
+            addSystemMessage(msg, true); 
+            resetUI(); 
+        });
+
+        socket.on('system-msg', (msg) => addSystemMessage(msg));
+        
+        socket.on('peer-joined', () => {
+            log("Someone joined the room! Connecting...");
+            document.getElementById('remoteStatus').innerText = "CONNECTING...";
+            isPolite = false; 
+            initPeerConnection();
+        });
+
+        socket.on('peer-left', () => {
+            log("Friend left the room.");
+            cleanupSession();
+            addSystemMessage("Friend Disconnected.");
+        });
+
+        socket.on('signal', async ({ sdp, candidate }) => {
+            try {
+                if (!pc) initPeerConnection();
+                if (sdp) {
+                    const collision = (sdp.type === "offer") && (makingOffer || pc.signalingState !== "stable");
+                    ignoreOffer = !isPolite && collision;
+                    if (ignoreOffer) return;
+                    
+                    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+                    if (sdp.type === "offer") {
+                        await pc.setLocalDescription();
+                        socket.emit("signal", { sdp: pc.localDescription, roomId: currentRoomId });
+                    }
+                } else if (candidate) {
+                    try {
+                        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                    } catch (err) {
+                        if (!ignoreOffer) log("Network Processing Error: " + err.message, true);
+                    }
+                }
+            } catch (err) { log("Connection Fault: " + err.message, true); }
+        });
+
+        /**
+         * 2. WEBRTC P2P LAYER
+         */
+        function initPeerConnection() {
+            if (pc) return; 
+            pc = new RTCPeerConnection(config);
+            
+            if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            pc.onnegotiationneeded = async () => {
+                try {
+                    makingOffer = true;
+                    await pc.setLocalDescription();
+                    socket.emit("signal", { sdp: pc.localDescription, roomId: currentRoomId });
+                } catch (err) { log("Handshake Error: " + err.message, true); } finally { makingOffer = false; }
+            };
+
+            pc.onicecandidate = (e) => {
+                if (e.candidate) socket.emit('signal', { candidate: e.candidate, roomId: currentRoomId });
+            };
+
+            pc.ontrack = (event) => {
+                log("Receiving track: " + event.track.kind);
+                const stream = event.streams[0];
+                if (event.track.kind === 'video') {
+                    document.getElementById('remoteVideo').srcObject = stream;
+                    videoSection.classList.remove('hidden');
+                } else {
+                    document.getElementById('remoteAudio').srcObject = stream;
+                    setupAudioAnalysis(stream, document.getElementById('remoteMeter'));
+                    document.getElementById('remoteStatus').innerText = "AUDIO LIVE";
+                }
+            };
+
+            pc.onsignalingstatechange = () => { 
+                diagSignal.innerText = pc.signalingState; 
+                diagSignal.style.color = pc.signalingState === 'stable' ? '#9ece6a' : '#e0af68';
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                const state = pc.iceConnectionState;
+                diagIce.innerText = state;
+                if (state === 'connected' || state === 'completed') {
+                    document.getElementById('remoteStatus').innerText = "LINKED";
+                    document.getElementById('statusDot').classList.add('status-pulse');
+                }
+                if (state === 'failed') pc.restartIce();
+            };
+
+            if (!isPolite) {
+                dataChannel = pc.createDataChannel("collaboration");
+                setupDataChannelListeners();
+            } else {
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    setupDataChannelListeners();
+                };
+            }
+        }
+
+        function setupDataChannelListeners() {
+            dataChannel.binaryType = 'arraybuffer';
+            
+            dataChannel.onopen = () => { 
+                log("Data bridge established.");
+                diagChannel.innerText = "open";
+                diagChannel.style.color = "#9ece6a";
+                isP2PActive = true; 
+                toggleChatUI(true); 
+                screenShareBtn.disabled = false;
+                
+                if (fullChatHistory.length > 0) {
+                    dataChannel.send(JSON.stringify({ type: 'history-sync', history: fullChatHistory }));
+                }
+            };
+
+            dataChannel.onclose = () => {
+                diagChannel.innerText = "closed";
+                diagChannel.style.color = "#f7768e";
+                isP2PActive = false;
+                toggleChatUI(false);
+            };
+
+            dataChannel.onmessage = (event) => processP2PMessage(event.data);
+        }
+
+        function processP2PMessage(rawData) {
+            // 1. Binary Data Handling (Files)
+            if (rawData instanceof ArrayBuffer || (rawData && typeof rawData === 'object' && 'byteLength' in rawData)) {
+                incomingFileBuffer.push(rawData);
+                receivedSize += rawData.byteLength;
+                updateFileProgress(incomingFileName, Math.round((receivedSize / incomingFileSize) * 100));
+                
+                if (receivedSize >= incomingFileSize) {
+                    const blob = new Blob(incomingFileBuffer);
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = incomingFileName;
+                    link.className = "text-[#7dcfff] font-bold uppercase text-[11px] mt-2 block hover:underline";
+                    link.innerText = `[ DOWNLOAD_FILE: ${incomingFileName} ]`;
+                    
+                    const div = document.createElement('div');
+                    div.className = "flex justify-start mb-6";
+                    div.innerHTML = `<div class="bg-[#16161e] border border-[#565f89] p-5 text-xs max-w-sm rounded-lg shadow-xl"><span class="text-[#565f89] block mb-2 font-bold tracking-tighter">FILE_RECEIVED</span></div>`;
+                    div.firstChild.appendChild(link);
+                    chatMessages.appendChild(div);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    
+                    setTimeout(() => fileProgressContainer.classList.add('hidden'), 2000);
+                }
+                return;
+            }
+
+            // 2. Structured Data Handling (JSON)
+            try {
+                const data = JSON.parse(rawData);
+                if (data.type === 'file-meta') {
+                    incomingFileName = data.name; 
+                    incomingFileSize = data.size; 
+                    incomingFileBuffer = []; 
+                    receivedSize = 0;
+                    fileProgressContainer.classList.remove('hidden'); 
+                    updateFileProgress(incomingFileName, 0);
+                } else if (data.type === 'screen-stop') {
+                    document.getElementById('remoteVideo').srcObject = null;
+                    videoSection.classList.add('hidden');
+                } else if (data.type === 'history-sync') {
+                    if (fullChatHistory.length === 0) {
+                        fullChatHistory = data.history.map(item => ({ msg: item.msg, type: item.type === 'local' ? 'remote' : 'local', name: item.name }));
+                        renderChatHistory();
+                    }
+                } else if (data.text) { 
+                    addChatMessage(data.text, 'remote', data.name); 
+                }
+            } catch(e) { log("Data error: " + e.message, true); }
+        }
+
+        /**
+         * 3. USER ACTIONS
+         */
+        connectBtn.onclick = () => {
+            const rid = roomIdInput.value.trim(), pass = passwordInput.value.trim();
+            if (!rid || !pass) return addSystemMessage("PLEASE ENTER A ROOM NAME AND KEY", true);
+            
+            currentRoomId = rid;
+            isPolite = true; 
+            log("Accessing Room: " + rid);
+            socket.emit('join-room', { roomId: rid, password: pass });
+            
+            connectBtn.disabled = true; 
+            roomIdInput.disabled = true; 
+            passwordInput.disabled = true;
+            leaveBtn.disabled = false;
+            initPeerConnection();
+        };
+
+        leaveBtn.onclick = () => {
+            socket.emit('leave-room', currentRoomId);
+            cleanupSession();
+            resetUI();
+        };
+
+        function cleanupSession() {
+            if (pc) { pc.close(); pc = null; }
+            isP2PActive = false;
+            toggleChatUI(false);
+            document.getElementById('remoteVideo').srcObject = null;
+            videoSection.classList.add('hidden');
+            diagChannel.innerText = "closed";
+            diagChannel.style.color = "#f7768e";
+            diagIce.innerText = "closed";
+            document.getElementById('remoteStatus').innerText = "WAITING";
+        }
+
+        screenShareBtn.onclick = async () => {
+            if (!navigator.mediaDevices?.getDisplayMedia) return addSystemMessage("SORRY, YOUR BROWSER CAN'T SHARE SCREENS", true);
+            try {
+                if (screenStream) {
+                    if (isP2PActive && dataChannel?.readyState === 'open') {
+                        dataChannel.send(JSON.stringify({ type: 'screen-stop' }));
+                    }
+                    screenStream.getTracks().forEach(t => t.stop());
+                    if (pc) {
+                        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                        if (sender) pc.removeTrack(sender);
+                    }
+                    screenStream = null;
+                    screenShareBtn.innerText = "Share My Screen";
+                    videoSection.classList.add('hidden');
+                    return;
+                }
+                
+                const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { max: 24 }, width: { max: 1920 } } });
+                screenStream = s;
+                screenShareBtn.innerText = "Stop Sharing Feed";
+                videoSection.classList.remove('hidden');
+                
+                const vt = s.getVideoTracks()[0];
+                if ('contentHint' in vt) vt.contentHint = 'text';
+                
+                setTimeout(async () => {
+                    try {
+                        const sender = pc.addTrack(vt, s);
+                        const params = sender.getParameters(); 
+                        if (!params.encodings) params.encodings = [{}];
+                        params.encodings[0].maxBitrate = 1500000;
+                        await sender.setParameters(params);
+                    } catch (err) {}
+                }, 0);
+
+                vt.onended = () => screenShareBtn.click();
+            } catch (err) { addSystemMessage("SHARING ACCESS DENIED", true); }
+        };
+
+        fileInput.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (file.size > MAX_FILE_SIZE) {
+                addSystemMessage("SORRY, THE 50MB FILE LIMIT WAS EXCEEDED", true);
+                fileInput.value = ''; 
+                return;
+            }
+
+            if (!isP2PActive || dataChannel?.readyState !== 'open') {
+                addSystemMessage("YOU MUST BE CONNECTED TO SEND FILES", true);
+                return;
+            }
+
+            log("Sending file: " + file.name);
+            addSystemMessage(`UPLOADING: ${file.name}`);
+            dataChannel.send(JSON.stringify({ type: 'file-meta', name: file.name, size: file.size }));
+
+            const chunkSize = 16384, reader = new FileReader();
+            let offset = 0;
+            
+            reader.onload = (event) => {
+                dataChannel.send(event.target.result);
+                offset += event.target.result.byteLength;
+                updateFileProgress(file.name, Math.round((offset / file.size) * 100));
+                
+                if (offset < file.size) {
+                    reader.readAsArrayBuffer(file.slice(offset, offset + chunkSize));
+                } else { 
+                    addSystemMessage(`FILE SENT: ${file.name}`); 
+                    setTimeout(() => fileProgressContainer.classList.add('hidden'), 2000); 
+                }
+            };
+            fileProgressContainer.classList.remove('hidden');
+            reader.readAsArrayBuffer(file.slice(0, chunkSize));
+        };
+
+        // --- View Updates ---
+
+        function addChatMessage(msg, type, name) {
+            fullChatHistory.push({ msg, type, name });
+            const div = document.createElement('div');
+            div.className = `flex ${type === 'local' ? 'justify-end' : 'justify-start'} w-full mb-1`;
+            const bubbleType = type === 'local' ? 'chat-bubble-local' : 'chat-bubble-remote';
+            const nameColor = type === 'local' ? 'text-[#7dcfff]' : 'text-[#bb9af7]';
+            
+            div.innerHTML = `
+                <div class="${bubbleType} px-5 py-3 text-sm font-medium shadow-lg max-w-[85%]">
+                    <span class="font-black opacity-60 mr-2 text-[10px] uppercase ${nameColor}">${name}#</span>
+                    <span class="leading-relaxed">${msg}</span>
+                </div>
+            `;
+            chatMessages.appendChild(div); 
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function renderChatHistory() {
+            chatMessages.innerHTML = `<div class="text-center py-6"><span class="text-[11px] font-bold uppercase text-[#565f89] italic tracking-[0.25em]">Messages Restored</span></div>`;
+            const h = [...fullChatHistory]; fullChatHistory = [];
+            h.forEach(item => addChatMessage(item.msg, item.type, item.name));
+        }
+
+        function setupAudioAnalysis(stream, meter) {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const ana = ctx.createAnalyser();
+            ctx.createMediaStreamSource(stream).connect(ana);
+            ana.fftSize = 64;
+            const data = new Uint8Array(ana.frequencyBinCount);
+            const loop = () => {
+                ana.getByteFrequencyData(data);
+                meter.style.width = Math.min(100, (data.reduce((a,b)=>a+b)/data.length) * 4) + "%";
+                requestAnimationFrame(loop);
+            };
+            loop();
+        }
+
+        function updateFileProgress(name, percent) { 
+            fileNameLabel.innerText = "SENDING: " + name; 
+            filePercentLabel.innerText = percent + "%"; 
+            fileProgressBar.style.width = percent + "%"; 
+        }
+        
+        function toggleChatUI(enabled) { 
+            chatInput.disabled = !enabled; 
+            document.getElementById('sendBtn').disabled = !enabled; 
+            fileInput.disabled = !enabled;
+            if (enabled) {
+                fileInputLabel.classList.remove('disabled-label');
+                chatInput.placeholder = "Type a message for your friend...";
+            } else {
+                fileInputLabel.classList.add('disabled-label');
+                chatInput.placeholder = "Waiting to connect...";
+            }
+        }
+        
+        function resetUI() { 
+            connectBtn.disabled = false; roomIdInput.disabled = false; passwordInput.disabled = false; 
+            leaveBtn.disabled = true; screenShareBtn.disabled = true;
+            toggleChatUI(false); 
+            videoSection.classList.add('hidden'); 
+            fullChatHistory = [];
+            chatMessages.innerHTML = `<div class="text-center py-8"><span class="text-[11px] font-black uppercase text-[#565f89] tracking-[0.4em]">Connection Ended</span></div>`;
+            diagIce.innerText = "idle"; diagSignal.innerText = "stable"; diagChannel.innerText = "closed";
+            document.getElementById('statusDot').className = "w-2 h-2 rounded-full bg-[#565f89]";
+        }
+
+        // --- Media Controls ---
+
+        muteBtn.onclick = () => { 
+            if (!localStream) return; 
+            isMuted = !isMuted; 
+            localStream.getAudioTracks()[0].enabled = !isMuted; 
+            muteBtn.innerText = isMuted ? "UNMUTE" : "MUTE"; 
+            muteBtn.style.color = isMuted ? "#f7768e" : "#7aa2f7"; 
+        };
+        
+        startMicBtn.onclick = async () => { 
+            if (!navigator.mediaDevices?.getUserMedia) return addSystemMessage("COULD NOT ACCESS MICROPHONE", true); 
+            try { 
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true }); 
+                startMicBtn.innerText = "MICROPHONE ON"; 
+                startMicBtn.style.background = "#24283b";
+                startMicBtn.style.color = "#9ece6a";
+                document.getElementById('localStatus').innerText = "LIVE"; 
+                muteBtn.disabled = false; 
+                setupAudioAnalysis(localStream, document.getElementById('localMeter')); 
+                if (pc) localStream.getTracks().forEach(track => pc.addTrack(track, localStream)); 
+            } catch (err) { addSystemMessage("PLEASE ALLOW MICROPHONE ACCESS", true); } 
+        };
+
+        chatForm.onsubmit = (e) => {
+            e.preventDefault();
+            const msg = chatInput.value.trim();
+            if (!msg || !isP2PActive || dataChannel?.readyState !== 'open') return;
+            
+            try {
+                const payload = JSON.stringify({ text: msg, name: localUsername });
+                dataChannel.send(payload);
+                addChatMessage(msg, 'local', localUsername);
+                chatInput.value = '';
+            } catch (err) { log("Send error: " + err.message, true); }
+        };
+    </script>
+</body>
+</html>
